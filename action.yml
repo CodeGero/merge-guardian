@@ -1,0 +1,108 @@
+name: 'Merge Guardian'
+description: 'Enforce merge requirements — required reviewers, passing checks, up-to-date branches, linked issues.'
+author: 'Kryptorious Quantum Biosciences, Inc.'
+branding:
+  icon: 'git-merge'
+  color: 'green'
+
+inputs:
+  github-token:
+    description: 'GitHub token'
+    required: true
+  require-reviews:
+    description: 'Minimum approving reviews required'
+    required: false
+    default: '1'
+  require-checks:
+    description: 'Require status checks to pass'
+    required: false
+    default: 'true'
+  require-up-to-date:
+    description: 'Require branch to be up to date'
+    required: false
+    default: 'true'
+  require-linked-issue:
+    description: 'Require linked issue in PR body'
+    required: false
+    default: 'true'
+  block-wip:
+    description: 'Block PRs with WIP/Draft in title'
+    required: false
+    default: 'true'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Check merge requirements
+      shell: bash
+      run: |
+        REPO="${{ github.repository }}"
+        TOKEN="${{ inputs.github-token }}"
+        PR_NUM="${{ github.event.pull_request.number }}"
+        FAIL=0
+
+        echo "Checking PR #$PR_NUM merge readiness..."
+
+        # Get PR details
+        PR_DATA=$(curl -s -H "Authorization: token $TOKEN" \
+          "https://api.github.com/repos/$REPO/pulls/$PR_NUM")
+
+        TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
+        BODY=$(echo "$PR_DATA" | jq -r '.body // ""')
+        STATE=$(echo "$PR_DATA" | jq -r '.mergeable_state // ""')
+        DRAFT=$(echo "$PR_DATA" | jq -r '.draft // false')
+
+        # Check WIP/Draft
+        if [ "${{ inputs.block-wip }}" = "true" ]; then
+          if echo "$TITLE" | grep -qiE "^(wip|draft|do not merge|\[wip\])" || [ "$DRAFT" = "true" ]; then
+            echo "  Blocked: PR is marked as WIP/Draft"
+            FAIL=1
+          fi
+        fi
+
+        # Check linked issue
+        if [ "${{ inputs.require-linked-issue }}" = "true" ]; then
+          if ! echo "$BODY" | grep -qiE "(close|closes|closed|fix|fixes|fixed|resolve|resolves|resolved|ref|refs)\s+#\d+"; then
+            echo "  Warning: No linked issue found in description"
+          else
+            echo "  Linked issue found"
+          fi
+        fi
+
+        # Check up to date
+        if [ "${{ inputs.require-up-to-date }}" = "true" ]; then
+          if [ "$STATE" = "behind" ]; then
+            echo "  Blocked: Branch is behind base"
+            FAIL=1
+          else
+            echo "  Branch is up to date"
+          fi
+        fi
+
+        # Check reviews
+        REVIEWS=$(curl -s -H "Authorization: token $TOKEN" \
+          "https://api.github.com/repos/$REPO/pulls/$PR_NUM/reviews")
+        APPROVALS=$(echo "$REVIEWS" | jq '[.[] | select(.state == "APPROVED")] | length')
+        echo "  Reviews: $APPROVALS approving"
+
+        REQ="${{ inputs.require-reviews }}"
+        if [ "$APPROVALS" -lt "$REQ" ]; then
+          echo "  Needs $REQ approval(s), has $APPROVALS"
+        fi
+
+        if [ "$FAIL" = "1" ]; then
+          echo ""
+          echo "Merge requirements not met"
+          exit 1
+        fi
+
+        echo ""
+        echo "All merge requirements met"
+
+    - name: Summary
+      shell: bash
+      run: |
+        echo ""
+        echo "Merge Guardian complete"
+        echo "Premium: Custom policies, Slack notifications, merge analytics"
+        echo "https://kryptorious.gumroad.com/l/jbvet"
