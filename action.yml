@@ -44,7 +44,7 @@ runs:
         echo "Checking PR #$PR_NUM merge readiness..."
 
         # Get PR details
-        PR_DATA=$(curl -s -H "Authorization: token $TOKEN" \
+        PR_DATA=$(curl -s -H "Authorization: Bearer $TOKEN" \
           "https://api.github.com/repos/$REPO/pulls/$PR_NUM")
 
         TITLE=$(echo "$PR_DATA" | jq -r '.title // ""')
@@ -79,8 +79,21 @@ runs:
           fi
         fi
 
+        # Check required status checks (declared input: require-checks)
+        if [ "${{ inputs.require-checks }}" = "true" ]; then
+          STATUSES=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            "https://api.github.com/repos/$REPO/commits/$PR_NUM/status")
+          FAILURES=$(echo "$STATUSES" | jq '[.statuses[]? | select(.state == "failure" or .state == "error")] | length')
+          if [ "${FAILURES:-0}" -gt 0 ]; then
+            echo "  Blocked: $FAILURES status check(s) failing"
+            FAIL=1
+          else
+            echo "  All reported status checks passing"
+          fi
+        fi
+
         # Check reviews
-        REVIEWS=$(curl -s -H "Authorization: token $TOKEN" \
+        REVIEWS=$(curl -s -H "Authorization: Bearer $TOKEN" \
           "https://api.github.com/repos/$REPO/pulls/$PR_NUM/reviews")
         APPROVALS=$(echo "$REVIEWS" | jq '[.[] | select(.state == "APPROVED")] | length')
         echo "  Reviews: $APPROVALS approving"
